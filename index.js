@@ -1,27 +1,18 @@
-import { exec } from "child_process";
+import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import voice from "elevenlabs-node";
-import express from "express";
+import { exec } from "child_process";
 import { promises as fs } from "fs";
-dotenv.config();
+import gTTS from "gtts";
 
-const elevenLabsApiKey = process.env.ELEVEN_LABS_API_KEY;
-const voiceID = "9BWtsMINqrJLrRacOk9x";
+dotenv.config();
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 const port = 3000;
 
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-
-app.get("/voices", async (req, res) => {
-  res.send(await voice.getVoices(elevenLabsApiKey));
-});
-
+// ✅ Helper function to execute shell commands
 const execCommand = (command) => {
   return new Promise((resolve, reject) => {
     exec(command, (error, stdout, stderr) => {
@@ -31,23 +22,44 @@ const execCommand = (command) => {
   });
 };
 
+// ✅ Generate lipsync data using Rhubarb
 const lipSyncMessage = async (message) => {
   const time = new Date().getTime();
   console.log(`Starting conversion for message ${message}`);
+
+  // Convert MP3 to WAV for Rhubarb processing
   await execCommand(
     `ffmpeg -y -i audios/message_${message}.mp3 audios/message_${message}.wav`
   );
   console.log(`Conversion done in ${new Date().getTime() - time}ms`);
+
+  // Generate lip-sync JSON with Rhubarb
   await execCommand(
     `C:\\rhubarb\\rhubarb.exe -f json -o audios/message_${message}.json audios/message_${message}.wav -r phonetic`
-  );  
+  );
   console.log(`Lip sync done in ${new Date().getTime() - time}ms`);
 };
 
+// ✅ TTS using gTTS
+const ttsGtts = async (text, outputFile) => {
+  return new Promise((resolve, reject) => {
+    const gtts = new gTTS(text, "en");
+    gtts.save(outputFile, (err) => {
+      if (err) {
+        console.error("Error generating speech:", err);
+        reject(err);
+      } else {
+        console.log(`Generated speech: ${outputFile}`);
+        resolve(outputFile);
+      }
+    });
+  });
+};
+
+// ✅ Endpoint to handle chat requests
 app.post("/chat", async (req, res) => {
   const userMessage = req.body.message;
-  
-  // If no message is provided, send a predefined response
+
   if (!userMessage) {
     res.send({
       messages: [
@@ -69,69 +81,47 @@ app.post("/chat", async (req, res) => {
     });
     return;
   }
-  
-  // Check for ElevenLabs API key
-  if (!elevenLabsApiKey) {
-    res.send({
-      messages: [
-        {
-          text: "Please my dear, don't forget to add your API key!",
-          audio: await audioFileToBase64("audios/api_0.wav"),
-          lipsync: await readJsonTranscript("audios/api_0.json"),
-          facialExpression: "angry",
-          animation: "Angry",
-        },
-        {
-          text: "You don't want to ruin Wawa Sensei with a crazy ElevenLabs bill, right?",
-          audio: await audioFileToBase64("audios/api_1.wav"),
-          lipsync: await readJsonTranscript("audios/api_1.json"),
-          facialExpression: "smile",
-          animation: "Laughing",
-        },
-      ],
-    });
-    return;
-  }
 
-  // Bypass OpenAI, just say what the user typed
+  // ✅ Create message data
   const messages = [
     {
       text: userMessage,
       facialExpression: "default",
-      animation: "Talking_1"
-    }
+      animation: "Talking_1",
+    },
   ];
 
-  // Generate audio and lipsync for the message
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i];
-    const fileName = `audios/message_${i}.mp3`;
-    const textInput = message.text;
+    const fileNameMp3 = `audios/message_${i}.mp3`;
 
-    // Convert text to speech using ElevenLabs API
-    await voice.textToSpeech(elevenLabsApiKey, voiceID, fileName, textInput);
+    // ✅ Generate speech using gTTS
+    await ttsGtts(message.text, fileNameMp3);
 
-    // Generate lipsync data
+    // ✅ Generate lip-sync data
     await lipSyncMessage(i);
 
-    // Add audio and lipsync data to the response
-    message.audio = await audioFileToBase64(fileName);
+    // ✅ Add audio and lipsync data to response
+    message.audio = await audioFileToBase64(fileNameMp3);
     message.lipsync = await readJsonTranscript(`audios/message_${i}.json`);
   }
 
   res.send({ messages });
 });
 
+// ✅ Read lip-sync JSON transcript
 const readJsonTranscript = async (file) => {
   const data = await fs.readFile(file, "utf8");
   return JSON.parse(data);
 };
 
+// ✅ Convert audio file to Base64
 const audioFileToBase64 = async (file) => {
   const data = await fs.readFile(file);
   return data.toString("base64");
 };
 
+// ✅ Server listening
 app.listen(port, () => {
   console.log(`Virtual Teacher listening on port ${port}`);
 });
